@@ -24,6 +24,7 @@ from exodus_bundler.errors import UnsupportedArchitectureError
 from exodus_bundler.launchers import CompilerNotFoundError
 from exodus_bundler.launchers import construct_bash_launcher
 from exodus_bundler.launchers import construct_binary_launcher
+from exodus_bundler.launchers import construct_go_launcher
 from exodus_bundler.templating import render_template
 from exodus_bundler.templating import render_template_file
 
@@ -41,7 +42,9 @@ def bytes_to_int(bytes, byteorder='big'):
 
 
 def create_bundle(executables, output, tarball=False, rename=[], chroot=None, add=[],
-                  no_symlink=[], shell_launchers=False, detect=False):
+                  no_symlink=[], shell_launchers=False, go_launchers=False, detect=False):
+    assert not (shell_launchers and go_launchers), "Incompatible arguments: --shell-launchers and --go-launchers"
+        
     """Handles the creation of the full bundle."""
     # Initialize these ahead of time so they're always available for error handling.
     output_filename, output_file, root_directory = None, None, None
@@ -50,7 +53,7 @@ def create_bundle(executables, output, tarball=False, rename=[], chroot=None, ad
         # Create a temporary unpackaged bundle for the executables.
         root_directory = create_unpackaged_bundle(
             executables, rename=rename, chroot=chroot, add=add, no_symlink=no_symlink,
-            shell_launchers=shell_launchers, detect=detect,
+            shell_launchers=shell_launchers, go_launchers=go_launchers, detect=detect,
         )
 
         # Populate the filename template.
@@ -100,7 +103,7 @@ def create_bundle(executables, output, tarball=False, rename=[], chroot=None, ad
 
 
 def create_unpackaged_bundle(executables, rename=[], chroot=None, add=[], no_symlink=[],
-                             shell_launchers=False, detect=False):
+                             shell_launchers=False, go_launchers=False, detect=False):
     """Creates a temporary directory containing the unpackaged contents of the bundle."""
     bundle = Bundle(chroot=chroot, working_directory=True)
     try:
@@ -142,7 +145,7 @@ def create_unpackaged_bundle(executables, rename=[], chroot=None, add=[], no_sym
             if file:
                 file.no_symlink = True
 
-        bundle.create_bundle(shell_launchers=shell_launchers)
+        bundle.create_bundle(shell_launchers=shell_launchers, go_launchers=go_launchers)
 
         return bundle.working_directory
     except:  # noqa: E722
@@ -516,7 +519,7 @@ class File(object):
         os.symlink(relative_destination_path, entry_point_path)
 
     def create_launcher(self, working_directory, bundle_root, linker_basename, symlink_basename,
-                        shell_launcher=False):
+                        shell_launcher=False, go_launcher=False):
         """Creates a launcher at `source` for `destination`.
 
         Note:
@@ -528,6 +531,7 @@ class File(object):
             symlink_basename (str): The basename of the symlink to the actual executable.
             shell_launcher (bool, optional): Forces the use of shell script launcher instead of
                 attempting to compile first using musl or diet c.
+            go_launcher (bool, optional): Builds binary launchers using go instead of c.
         Returns:
             str: The normalized and absolute path to the launcher.
         """
@@ -584,7 +588,12 @@ class File(object):
             if shell_launcher:
                 raise CompilerNotFoundError()
 
-            launcher_content = construct_binary_launcher(
+            if go_launcher:
+                fn = construct_go_launcher
+            else:
+                fn = construct_binary_launcher
+            
+            launcher_content = fn(
                 linker=linker, library_path=library_path, executable=executable,
                 full_linker=full_linker)
             with open(source_path, 'wb') as f:
@@ -759,7 +768,7 @@ class Bundle(object):
 
         return file
 
-    def create_bundle(self, shell_launchers=False):
+    def create_bundle(self, shell_launchers=False, go_launchers=False):
         """Creates the unpackaged bundle in `working_directory`.
 
         Args:
@@ -828,7 +837,8 @@ class Bundle(object):
                 symlink_basename = os.path.basename(symlink_path)
                 file.create_launcher(self.working_directory, self.bundle_root,
                                      linker_basename, symlink_basename,
-                                     shell_launcher=shell_launchers)
+                                     shell_launcher=shell_launchers,
+                                     go_launcher=go_launchers)
 
     def delete_working_directory(self):
         """Recursively deletes the working directory."""

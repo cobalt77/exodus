@@ -49,7 +49,13 @@ def compile(code):
         try:
             return compile_diet(code)
         except CompilerNotFoundError:
-            raise CompilerNotFoundError('No suiteable C compiler was found.')
+            raise CompilerNotFoundError('No suitable C compiler was found.')
+
+def compile_go(code):
+    go = find_executable('go')
+    if go is None:
+        raise CompilerNotFoundError('The go compiler was not found.')
+    return compile_go_helper(code, [go])
 
 
 def compile_diet(code):
@@ -71,6 +77,31 @@ def compile_helper(code, initial_args):
 
         args = initial_args + ['-static', '-O3', input_filename, '-o', output_filename]
         process = Popen(args, stdout=PIPE, stderr=PIPE)
+        stdout, stderr = process.communicate()
+        assert process.returncode == 0, \
+            'There was an error compiling: %s' % stderr.decode('utf-8')
+
+        with open(output_filename, 'rb') as output_file:
+            return output_file.read()
+    finally:
+        os.remove(input_filename)
+        os.remove(output_filename)
+
+
+def compile_go_helper(code, initial_args):
+    f, input_filename = tempfile.mkstemp(prefix='exodus-bundle-', suffix='.go')
+    os.close(f)
+    f, output_filename = tempfile.mkstemp(prefix='exodus-bundle-')
+    os.close(f)
+
+    try:
+        with open(input_filename, 'w') as input_file:
+            input_file.write(code)
+
+        args = initial_args + ['build', '-ldflags=-s -w', '-o', output_filename, input_filename]
+        env = os.environ.copy()
+        env['CGO_ENABLED'] = '0'
+        process = Popen(args, stdout=PIPE, stderr=PIPE, env=env)
         stdout, stderr = process.communicate()
         assert process.returncode == 0, \
             'There was an error compiling: %s' % stderr.decode('utf-8')
@@ -104,3 +135,13 @@ def construct_binary_launcher(linker, library_path, executable, full_linker=True
                                 linker_dirname=linker_dirname, library_path=library_path,
                                 executable=executable, full_linker=full_linker)
     return compile(code)
+
+
+def construct_go_launcher(linker, library_path, executable, full_linker=True):
+    linker_dirname, linker_basename = os.path.split(linker)
+    full_linker = 'true' if full_linker else 'false'
+    code = render_template_file('launcher.go', linker_basename=linker_basename,
+                                linker_dirname=linker_dirname, library_path=library_path,
+                                executable=executable, full_linker=full_linker)
+    return compile_go(code)
+    
